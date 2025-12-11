@@ -45,7 +45,6 @@ import stirling.software.proprietary.security.service.JwtServiceInterface;
 public class CustomLogoutSuccessHandler extends SimpleUrlLogoutSuccessHandler {
 
     public static final String LOGOUT_PATH = "/login?logout=true";
-    public static final String KEYCLOAK_LOGOUT_PATH = "/protocol/openid-connect/logout";
 
     private static final Map<String, String> endSessionEndpointCache = new ConcurrentHashMap<>();
 
@@ -209,7 +208,7 @@ public class CustomLogoutSuccessHandler extends SimpleUrlLogoutSuccessHandler {
 
         // If no endpoint found and this is Keycloak, try the hardcoded path
         if (endSessionEndpoint == null && isKeycloak && issuer != null) {
-            endSessionEndpoint = issuer + KEYCLOAK_LOGOUT_PATH;
+            endSessionEndpoint = issuer + "/protocol/openid-connect/logout";
             log.debug("Using Keycloak fallback logout path: {}", endSessionEndpoint);
         }
 
