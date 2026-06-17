@@ -1,5 +1,6 @@
 services:
   stirling-pdf:
+    image: stirling-pdf-custom
     build:
       context: ../..
       dockerfile: docker/embedded/Dockerfile
@@ -11,30 +12,36 @@ services:
       timeout: 10s
       retries: 16
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     volumes:
-      - ../../stirling/latest/data:/usr/share/tessdata:rw
-      - ../../stirling/latest/config:/configs:rw
-      - ../../stirling/latest/logs:/logs:rw
+      - ../../trainingData:/usr/share/tessdata:rw
+      - ../../extraConfigs:/configs:rw
+      - ../../logs:/logs:rw
+      - ../../customFiles:/customFiles:rw
     environment:
-      DISABLE_ADDITIONAL_FEATURES: "true"
+      DOCKER_ENABLE_SECURITY: "false"
       SECURITY_ENABLELOGIN: "false"
-      SYSTEM_DEFAULTLOCALE: en-US
-      UI_APPNAME: Stirling-PDF
-      UI_HOMEDESCRIPTION: Demo site for Stirling-PDF Latest
-      UI_APPNAMENAVBAR: Stirling-PDF Latest
-      SYSTEM_MAXFILESIZE: "100"
+      DISABLE_ADDITIONAL_FEATURES: "true"
+      INSTALL_BOOK_AND_ADVANCED_HTML_OPS: "false"
+
+      SYSTEM_DEFAULTLOCALE: "pt-BR"
+      UI_APP_LOCALE: "pt-BR"
+      UI_APPNAME: "PMRO PDF"
+      UI_APPNAMENAVBAR: "PMRO PDF"
+      UI_HOMEDESCRIPTION: "Ferramentas de PDF da Prefeitura de Rio das Ostras"
+      UI_DEFAULT_VIEW: "grid"
+
+      TESSDATA_PREFIX: "/usr/share/tessdata"
+
+      SYSTEM_MAXFILESIZE: "0"
+      SYSTEM_FILEUPLOADLIMIT: "999GB"
+
       METRICS_ENABLED: "true"
-      SYSTEM_GOOGLEVISIBILITY: "true"
-      SHOW_SURVEY: "true"
+      SYSTEM_GOOGLEVISIBILITY: "false"
+      SHOW_SURVEY: "false"
     networks:
       - stirling-network
 
 networks:
   stirling-network:
     driver: bridge
-
-volumes:
-  stirling-data:
-  stirling-config:
-  stirling-logs:

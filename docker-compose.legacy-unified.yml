@@ -20,6 +20,7 @@ services:
       - SYSTEM_DEFAULTLOCALE=pt-BR
       - UI_APP_LOCALE=pt-BR
       - TESSDATA_PREFIX=/usr/share/tesseract-ocr/4.00/tessdata
-      - UI_DEFAULT_VIEW=gird  # Define o padrão como Grade (ícones grandes)
+      - UI_DEFAULT_VIEW=grid  # Define o padrão como Grade (ícones grandes)
       - SYSTEM_MAXFILESIZE=0  # <--- ADICIONE ESTA LINHA (0 = ilimitado)
+      - SYSTEM_FILEUPLOADLIMIT=999GB
     restart: always
