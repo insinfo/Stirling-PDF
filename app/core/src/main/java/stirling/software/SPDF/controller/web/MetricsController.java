@@ -1,5 +1,7 @@
 package stirling.software.SPDF.controller.web;
 
+import java.io.IOException;
+import java.io.InputStream;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.*;
@@ -40,9 +42,7 @@ public class MetricsController {
 
     @PostConstruct
     public void init() {
-        Boolean metricsEnabled = applicationProperties.getMetrics().getEnabled();
-        if (metricsEnabled == null) metricsEnabled = true;
-        this.metricsEnabled = metricsEnabled;
+        metricsEnabled = applicationProperties.getMetrics().isEnabled();
     }
 
     @GetMapping("/status")
@@ -51,13 +51,40 @@ public class MetricsController {
             description =
                     "This endpoint returns the status of the application and its version number.")
     public ResponseEntity<?> getStatus() {
-        if (!metricsEnabled) {
-            return ResponseEntity.status(HttpStatus.FORBIDDEN).body("This endpoint is disabled.");
-        }
+        return getApplicationStatus();
+    }
+
+    @GetMapping("/health")
+    @Operation(
+            summary = "Application health check",
+            description =
+                    "This endpoint returns the health status of the application and its version number. Mirrors /api/v1/info/status.")
+    public ResponseEntity<?> getHealth() {
+        return getApplicationStatus();
+    }
+
+    private ResponseEntity<?> getApplicationStatus() {
         Map<String, String> status = new HashMap<>();
         status.put("status", "UP");
-        status.put("version", getClass().getPackage().getImplementationVersion());
+        String version = getClass().getPackage().getImplementationVersion();
+        if (version == null) {
+            version = getVersionFromProperties();
+        }
+        status.put("version", version);
         return ResponseEntity.ok(status);
+    }
+
+    private String getVersionFromProperties() {
+        try (InputStream is = getClass().getResourceAsStream("/version.properties")) {
+            if (is != null) {
+                Properties props = new Properties();
+                props.load(is);
+                return props.getProperty("version");
+            }
+        } catch (IOException e) {
+            log.error("Failed to load version.properties", e);
+        }
+        return null;
     }
 
     @GetMapping("/load")
@@ -389,7 +416,7 @@ public class MetricsController {
         long hours = duration.toHoursPart();
         long minutes = duration.toMinutesPart();
         long seconds = duration.toSecondsPart();
-        return String.format("%dd %dh %dm %ds", days, hours, minutes, seconds);
+        return String.format(Locale.ROOT, "%dd %dh %dm %ds", days, hours, minutes, seconds);
     }
 
     @Setter

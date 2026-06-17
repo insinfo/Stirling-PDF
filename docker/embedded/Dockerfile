@@ -1,138 +1,136 @@
-# Stirling-PDF Dockerfile - Full version with embedded frontend
-# Single JAR contains both frontend and backend
+# Stirling-PDF - Full version (embedded frontend)
+# Uses pre-built base image for fast builds
 
-# Stage 1: Build application with embedded frontend
-FROM gradle:8.14-jdk21 AS build
+ARG BASE_VERSION=1.0.2
+ARG BASE_IMAGE=stirlingtools/stirling-pdf-base:${BASE_VERSION}
 
-# Install Node.js and npm for frontend build
-RUN apt-get update && apt-get install -y \
-    curl \
+# Stage 1: Build the Java application and frontend
+FROM gradle:9.5.1-jdk25@sha256:8de3543f1772bb66be3b275893e5977b6d8bd2b0d25551faa5846a821d1f0600 AS app-build
+
+ARG TASK_VERSION=3.49.1
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl ca-certificates \
+    && update-ca-certificates \
     && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
-    && apt-get install -y nodejs \
-    && npm --version \
-    && node --version \
-    && apt-get clean \
+    && apt-get install -y --no-install-recommends nodejs \
+    && ARCH=$(dpkg --print-architecture) \
+    && curl -fsSL "https://github.com/go-task/task/releases/download/v${TASK_VERSION}/task_${TASK_VERSION}_linux_${ARCH}.deb" -o /tmp/task.deb \
+    && dpkg -i /tmp/task.deb \
+    && rm /tmp/task.deb \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy gradle files for dependency resolution
-COPY build.gradle .
-COPY settings.gradle .
-COPY gradlew .
-COPY gradle gradle/
-COPY app/core/build.gradle core/.
-COPY app/common/build.gradle common/.
-COPY app/proprietary/build.gradle proprietary/.
-RUN ./gradlew build -x spotlessApply -x spotlessCheck -x test -x sonarqube || return 0
+# JDK 25+: --add-exports is no longer accepted via JAVA_TOOL_OPTIONS; use JDK_JAVA_OPTIONS instead
+ENV JDK_JAVA_OPTIONS="--add-exports=jdk.compiler/com.sun.tools.javac.api=ALL-UNNAMED \
+  --add-exports=jdk.compiler/com.sun.tools.javac.file=ALL-UNNAMED \
+  --add-exports=jdk.compiler/com.sun.tools.javac.parser=ALL-UNNAMED \
+  --add-exports=jdk.compiler/com.sun.tools.javac.tree=ALL-UNNAMED \
+  --add-exports=jdk.compiler/com.sun.tools.javac.util=ALL-UNNAMED"
 
-# Set working directory
 WORKDIR /app
 
-# Copy entire project
+COPY build.gradle settings.gradle gradlew ./
+COPY gradle/                               gradle/
+COPY app/core/build.gradle                  app/core/
+COPY app/common/build.gradle                app/common/
+COPY app/proprietary/build.gradle           app/proprietary/
+
+# Use system gradle instead of gradlew to avoid SSL issues downloading gradle distribution on emulated arm64
+RUN gradle dependencies --no-daemon || true
+
 COPY . .
 
-# Build JAR with embedded frontend (includes security features controlled at runtime)
-RUN DISABLE_ADDITIONAL_FEATURES=false \
-    STIRLING_PDF_DESKTOP_UI=false \
-    ./gradlew clean build -PbuildWithFrontend=true -x spotlessApply -x spotlessCheck -x test -x sonarqube
+ARG PROTOTYPES_BUILD=false
+ARG STIRLING_FLAVOR=proprietary
+ENV STIRLING_FLAVOR=${STIRLING_FLAVOR}
 
-# Stage 2: Runtime image
-FROM alpine:3.22.1
+RUN STIRLING_FLAVOR=${STIRLING_FLAVOR} \
+    gradle clean build \
+      -PbuildWithFrontend=true \
+      -PprototypesMode=${PROTOTYPES_BUILD} \
+      -x spotlessApply -x spotlessCheck -x test -x sonarqube \
+      --no-daemon
+
+# Stage 2: Extract Spring Boot Layers
+FROM eclipse-temurin:25-jre-noble@sha256:b27ca47660a8fa837e47a8533b9b1a3a430295cf29ca28d91af4fd121572dc29 AS jar-extract
+WORKDIR /tmp
+COPY --from=app-build /app/app/core/build/libs/*.jar app.jar
+RUN java -Djarmode=tools -jar app.jar extract --layers --destination /layers
+
+
+# Stage 3: Final runtime image on top of pre-built base
+FROM ${BASE_IMAGE}
 
 ARG VERSION_TAG
 
-# Labels
-LABEL org.opencontainers.image.title="Stirling-PDF"
-LABEL org.opencontainers.image.description="Stirling-PDF with embedded frontend - Full version"
-LABEL org.opencontainers.image.source="https://github.com/Stirling-Tools/Stirling-PDF"
-LABEL org.opencontainers.image.licenses="MIT"
-LABEL org.opencontainers.image.vendor="Stirling-Tools"
-LABEL org.opencontainers.image.url="https://www.stirlingpdf.com"
-LABEL org.opencontainers.image.documentation="https://docs.stirlingpdf.com"
-LABEL maintainer="Stirling-Tools"
-LABEL org.opencontainers.image.authors="Stirling-Tools"
-LABEL org.opencontainers.image.version="${VERSION_TAG}"
-LABEL org.opencontainers.image.keywords="PDF, manipulation, API, Spring Boot, React"
+WORKDIR /app
 
-# Copy scripts and fonts
-COPY scripts /scripts
-COPY app/core/src/main/resources/static/fonts/*.ttf /usr/share/fonts/opentype/noto/
+# Application layers
+COPY --link --from=jar-extract --chown=1000:1000 /layers/dependencies/           /app/
+COPY --link --from=jar-extract --chown=1000:1000 /layers/spring-boot-loader/     /app/
+COPY --link --from=jar-extract --chown=1000:1000 /layers/snapshot-dependencies/  /app/
+COPY --link --from=jar-extract --chown=1000:1000 /layers/application/            /app/
 
-# Copy built JAR from build stage
-COPY --from=build /app/app/core/build/libs/*.jar /app.jar
-COPY --from=build /app/build/libs/restart-helper.jar /restart-helper.jar
+COPY --link --from=app-build --chown=1000:1000 \
+     /app/build/libs/restart-helper.jar /restart-helper.jar
+COPY --link --chown=1000:1000 scripts/ /scripts/
 
-# Environment Variables
+# Fonts go to system dir, root ownership is correct (world-readable)
+COPY app/core/src/main/resources/static/fonts/*.ttf /usr/share/fonts/truetype/
+
+# Permissions and configuration
+RUN set -eux; \
+    chmod +x /scripts/*; \
+    ln -s /logs /app/logs; \
+    ln -s /configs /app/configs; \
+    ln -s /customFiles /app/customFiles; \
+    ln -s /pipeline /app/pipeline; \
+    ln -s /storage /app/storage; \
+    chown -h stirlingpdfuser:stirlingpdfgroup /app/logs /app/configs /app/customFiles /app/pipeline /app/storage; \
+    chown stirlingpdfuser:stirlingpdfgroup /app; \
+    chmod 750 /tmp/stirling-pdf; \
+    chmod 750 /tmp/stirling-pdf/heap_dumps; \
+    fc-cache -f
+
+# Write version to a file so it is readable by scripts without env-var inheritance.
+# init-without-ocr.sh reads /etc/stirling_version for the AOT cache fingerprint.
+RUN echo "${VERSION_TAG:-dev}" > /etc/stirling_version
+
+# Environment variables
 ENV VERSION_TAG=$VERSION_TAG \
-    JAVA_BASE_OPTS="-XX:+UnlockExperimentalVMOptions -XX:MaxRAMPercentage=75 -XX:InitiatingHeapOccupancyPercent=20 -XX:+G1PeriodicGCInvokesConcurrent -XX:G1PeriodicGCInterval=10000 -XX:+UseStringDeduplication -XX:G1PeriodicGCSystemLoadThreshold=70" \
+    STIRLING_AOT_ENABLE="false" \
+    STIRLING_JVM_PROFILE="balanced" \
+    _JVM_OPTS_BALANCED="-XX:+ExitOnOutOfMemoryError -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/configs/heap_dumps -XX:+UseG1GC -XX:MaxGCPauseMillis=200 -XX:G1HeapRegionSize=4m -XX:G1PeriodicGCInterval=60000 -XX:+UseStringDeduplication -XX:+UseCompactObjectHeaders -XX:+ExplicitGCInvokesConcurrent -Dspring.threads.virtual.enabled=true -Djava.awt.headless=true" \
+    _JVM_OPTS_PERFORMANCE="-XX:+ExitOnOutOfMemoryError -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/configs/heap_dumps -XX:+UseShenandoahGC -XX:ShenandoahGCMode=generational -XX:+UseCompactObjectHeaders -XX:+UseStringDeduplication -XX:+AlwaysPreTouch -XX:+ExplicitGCInvokesConcurrent -Dspring.threads.virtual.enabled=true -Djava.awt.headless=true" \
     JAVA_CUSTOM_OPTS="" \
     HOME=/home/stirlingpdfuser \
     PUID=1000 \
     PGID=1000 \
     UMASK=022 \
-    PYTHONPATH=/usr/lib/libreoffice/program:/opt/venv/lib/python3.12/site-packages \
-    UNO_PATH=/usr/lib/libreoffice/program \
-    URE_BOOTSTRAP=file:///usr/lib/libreoffice/program/fundamentalrc \
-    PATH=$PATH:/opt/venv/bin \
     STIRLING_TEMPFILES_DIRECTORY=/tmp/stirling-pdf \
     TMPDIR=/tmp/stirling-pdf \
     TEMP=/tmp/stirling-pdf \
-    TMP=/tmp/stirling-pdf
+    TMP=/tmp/stirling-pdf \
+    DBUS_SESSION_BUS_ADDRESS=/dev/null \
+    SAL_TMP=/tmp/stirling-pdf/libre
 
-# Install all dependencies
-RUN echo "@main https://dl-cdn.alpinelinux.org/alpine/edge/main" | tee -a /etc/apk/repositories && \
-    echo "@community https://dl-cdn.alpinelinux.org/alpine/edge/community" | tee -a /etc/apk/repositories && \
-    echo "@testing https://dl-cdn.alpinelinux.org/alpine/edge/testing" | tee -a /etc/apk/repositories && \
-    apk upgrade --no-cache -a && \
-    apk add --no-cache \
-    ca-certificates \
-    tzdata \
-    tini \
-    bash \
-    curl \
-    shadow \
-    su-exec \
-    openssl \
-    openssl-dev \
-    openjdk21-jre \
-    # Doc conversion
-    gcompat \
-    libc6-compat \
-    libreoffice \
-    ghostscript \
-    fontforge \
-    # pdftohtml
-    poppler-utils \
-    # OCR MY PDF
-    unpaper \
-    tesseract-ocr-data-eng \
-    tesseract-ocr-data-chi_sim \
-    tesseract-ocr-data-deu \
-    tesseract-ocr-data-fra \
-    tesseract-ocr-data-por \
-    ocrmypdf \
-    # CV
-    py3-opencv \
-    python3 \
-    py3-pip \
-    py3-pillow@testing \
-    py3-pdf2image@testing && \
-    python3 -m venv /opt/venv && \
-    /opt/venv/bin/pip install --upgrade pip setuptools && \
-    /opt/venv/bin/pip install --no-cache-dir --upgrade unoserver weasyprint && \
-    ln -s /usr/lib/libreoffice/program/uno.py /opt/venv/lib/python3.12/site-packages/ && \
-    ln -s /usr/lib/libreoffice/program/unohelper.py /opt/venv/lib/python3.12/site-packages/ && \
-    ln -s /usr/lib/libreoffice/program /opt/venv/lib/python3.12/site-packages/LibreOffice && \
-    mv /usr/share/tessdata /usr/share/tessdata-original && \
-    mkdir -p $HOME /configs /logs /customFiles /pipeline/watchedFolders /pipeline/finishedFolders /tmp/stirling-pdf && \
-    fc-cache -f -v && \
-    chmod +x /scripts/* && \
-    # User permissions
-    addgroup -S stirlingpdfgroup && adduser -S stirlingpdfuser -G stirlingpdfgroup && \
-    chown -R stirlingpdfuser:stirlingpdfgroup $HOME /scripts /pipeline /usr/share/fonts/opentype/noto /configs /customFiles /tmp/stirling-pdf && \
-    chown stirlingpdfuser:stirlingpdfgroup /app.jar /restart-helper.jar
+# Metadata labels
+LABEL org.opencontainers.image.title="Stirling-PDF" \
+      org.opencontainers.image.description="Full version with Calibre, LibreOffice, Tesseract, OCRmyPDF" \
+      org.opencontainers.image.source="https://github.com/Stirling-Tools/Stirling-PDF" \
+      org.opencontainers.image.licenses="MIT" \
+      org.opencontainers.image.vendor="Stirling-Tools" \
+      org.opencontainers.image.url="https://www.stirlingpdf.com" \
+      org.opencontainers.image.documentation="https://docs.stirlingpdf.com" \
+      maintainer="Stirling-Tools" \
+      org.opencontainers.image.authors="Stirling-Tools" \
+      org.opencontainers.image.version="${VERSION_TAG}" \
+      org.opencontainers.image.keywords="PDF, manipulation, API, Spring Boot, React"
 
 EXPOSE 8080/tcp
+STOPSIGNAL SIGTERM
 
-# Set user and run command
+HEALTHCHECK --interval=30s --timeout=15s --start-period=120s --retries=5 \
+  CMD curl -fs --max-time 10 http://localhost:8080${SYSTEM_ROOTURIPATH:-''}/api/v1/info/status || exit 1
+
 ENTRYPOINT ["tini", "--", "/scripts/init.sh"]
-CMD ["sh", "-c", "java -Dfile.encoding=UTF-8 -Djava.io.tmpdir=/tmp/stirling-pdf -jar /app.jar & /opt/venv/bin/unoserver --port 2003 --interface 127.0.0.1"]
+CMD []

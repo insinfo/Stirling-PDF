@@ -325,6 +325,11 @@ public final class RegexPatternUtils {
         return getPattern("\\+");
     }
 
+    /** Pattern for splitting on pipe delimiter (used for hint lists in i18n messages) */
+    public Pattern getPipeDelimiterPattern() {
+        return getPattern("\\|");
+    }
+
     /** Pattern for username validation */
     public Pattern getUsernameValidationPattern() {
         return getPattern("^[a-zA-Z0-9](?!.*[-@._+]{2,})[a-zA-Z0-9@._+-]{1,48}[a-zA-Z0-9]$");
@@ -533,9 +538,9 @@ public final class RegexPatternUtils {
         getPattern("[^a-zA-Z0-9 ]"); // Input sanitization
         getPattern("[^a-zA-Z0-9]"); // Filename sanitization
         // API doc patterns
-        getPattern("Output:(\\w+)"); // precompiled single-escaped for runtime regex \w
-        getPattern("Input:(\\w+)");
-        getPattern("Type:(\\w+)");
+        getPattern("Output:\\s*(\\w+)");
+        getPattern("Input:\\s*(\\w+)");
+        getPattern("Type:\\s*(\\w+)");
         log.debug("Pre-compiled {} common regex patterns", patternCache.size());
     }
 
@@ -547,24 +552,34 @@ public final class RegexPatternUtils {
 
     /* Pattern for matching Output:<TYPE> in API descriptions */
     public Pattern getApiDocOutputTypePattern() {
-        return getPattern("Output:(\\w+)");
+        return getPattern("Output:\\s*(\\w+)");
     }
 
     /* Pattern for matching Input:<TYPE> in API descriptions */
     public Pattern getApiDocInputTypePattern() {
-        return getPattern("Input:(\\w+)");
+        return getPattern("Input:\\s*(\\w+)");
     }
 
     /**
      * Pattern for matching Type:<CODE> in API descriptions
      */
     public Pattern getApiDocTypePattern() {
-        return getPattern("Type:(\\w+)");
+        return getPattern("Type:\\s*(\\w+)");
     }
 
     /* Pattern for validating file extensions (2-4 alphanumeric, case-insensitive) */
     public Pattern getFileExtensionValidationPattern() {
         return getPattern("^[a-zA-Z0-9]{2,4}$", Pattern.CASE_INSENSITIVE);
+    }
+
+    /** Pattern for splitting on line breaks (Unicode line separator) */
+    public Pattern getLineSeparatorPattern() {
+        return getPattern("\\R");
+    }
+
+    /** Pattern for removing leading asterisks and whitespace */
+    public Pattern getLeadingAsterisksWhitespacePattern() {
+        return getPattern("^[*\\s]+");
     }
 
     private record PatternKey(String regex, int flags) {

@@ -1,6 +1,6 @@
 # Adding New React Tools to Stirling PDF
 
-This guide covers how to add new PDF tools to the React frontend, either by migrating existing Thymeleaf templates or creating entirely new tools.
+This guide covers how to add new PDF tools to the React frontend.
 
 ## Overview
 
@@ -10,14 +10,14 @@ When adding tools, follow this systematic approach using the established pattern
 
 Create these files in the correct directories:
 ```
-frontend/src/hooks/tools/[toolName]/
+frontend/editor/src/hooks/tools/[toolName]/
   ├── use[ToolName]Parameters.ts     # Parameter definitions and validation
   └── use[ToolName]Operation.ts      # Tool operation logic using useToolOperation
 
-frontend/src/components/tools/[toolName]/
+frontend/editor/src/components/tools/[toolName]/
   └── [ToolName]Settings.tsx         # Settings UI component (if needed)
 
-frontend/src/tools/
+frontend/editor/src/tools/
   └── [ToolName].tsx                 # Main tool component
 ```
 
@@ -128,7 +128,7 @@ export default [ToolName] as ToolComponent;
 ## 3. Register Tool in System
 Update these files to register your new tool:
 
-**Tool Registry** (`frontend/src/data/useTranslatedToolRegistry.tsx`):
+**Tool Registry** (`frontend/editor/src/data/useTranslatedToolRegistry.tsx`):
 1. Add imports at the top:
 ```typescript
 import [ToolName] from "../tools/[ToolName]";
@@ -155,7 +155,7 @@ import [ToolName]Settings from "../components/tools/[toolName]/[ToolName]Setting
 ## 4. Add Tooltips (Optional but Recommended)
 Create user-friendly tooltips to help non-technical users understand your tool. **Use simple, clear language - avoid technical jargon:**
 
-**Tooltip Hook** (`frontend/src/components/tooltips/use[ToolName]Tips.ts`):
+**Tooltip Hook** (`frontend/editor/src/components/tooltips/use[ToolName]Tips.ts`):
 ```typescript
 import { useTranslation } from 'react-i18next';
 import { TooltipContent } from '../../types/tips';
@@ -188,7 +188,7 @@ import { use[ToolName]Tips } from "../components/tooltips/use[ToolName]Tips";
 
 const [ToolName] = (props: BaseToolProps) => {
   const tips = use[ToolName]Tips();
-  
+
   // In your steps array:
   steps: [
     {
@@ -200,9 +200,9 @@ const [ToolName] = (props: BaseToolProps) => {
 ```
 
 ## 5. Add Translations
-Update translation files. **Important: Only update `en-GB` files** - other languages are handled separately.
+Update translation files. **Important: Only update `en-US` files** - other languages are handled separately.
 
-**File to update:** `frontend/public/locales/en-GB/translation.toml`
+**File to update:** `frontend/editor/public/locales/en-US/translation.toml`
 
 **Required Translation Keys**:
 ```toml
@@ -251,28 +251,20 @@ Update translation files. **Important: Only update `en-GB` files** - other langu
 ```
 
 **Translation Notes:**
-- **Only update `en-GB/translation.toml`** - other locale files are managed separately
+- **Only update `en-US/translation.toml`** - other locale files are managed separately
 - Use descriptive keys that match your component's `t()` calls
 - Include tooltip translations if you created tooltip hooks
 - Add `options.*` keys if your tool has settings with descriptions
 
 **Tooltip Writing Guidelines:**
-- **Use simple, everyday language** - avoid technical terms like "converts interactive elements" 
+- **Use simple, everyday language** - avoid technical terms like "converts interactive elements"
 - **Focus on benefits** - explain what the user gains, not how it works internally
 - **Use concrete examples** - "text boxes become regular text" vs "form fields are flattened"
 - **Answer user questions** - "What does this do?", "When should I use this?", "What's this option for?"
 - **Keep descriptions concise** - 1-2 sentences maximum per section
 - **Use bullet points** for multiple benefits or features
 
-## 6. Migration from Thymeleaf
-When migrating existing Thymeleaf templates:
-
-1. **Identify Form Parameters**: Look at the original `<form>` inputs to determine parameter structure
-2. **Extract Translation Keys**: Find `#{key.name}` references and add them to JSON translations (For many tools these translations will already exist but some parts will be missing)
-3. **Map API Endpoint**: Note the `th:action` URL for the operation hook
-4. **Preserve Functionality**: Ensure all original form behaviour is replicated which is applicable to V2 react UI
-
-## 7. Testing Your Tool
+## 6. Testing Your Tool
 - Verify tool appears in UI with correct icon and description
 - Test with various file sizes and types
 - Confirm translations work

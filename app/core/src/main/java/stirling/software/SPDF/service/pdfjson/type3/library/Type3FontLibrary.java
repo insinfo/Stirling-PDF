@@ -10,22 +10,20 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.stream.Collectors;
 
 import org.apache.pdfbox.cos.COSName;
 import org.apache.pdfbox.pdmodel.font.PDType3Font;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.Resource;
 import org.springframework.core.io.ResourceLoader;
 import org.springframework.stereotype.Component;
-
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.ObjectMapper;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
 import stirling.software.SPDF.service.pdfjson.type3.Type3FontSignatureCalculator;
+
+import tools.jackson.core.type.TypeReference;
+import tools.jackson.databind.ObjectMapper;
 
 @Slf4j
 @Component
@@ -34,8 +32,8 @@ public class Type3FontLibrary {
 
     private final ObjectMapper objectMapper;
     private final ResourceLoader resourceLoader;
+    private final stirling.software.common.model.ApplicationProperties applicationProperties;
 
-    @Value("${stirling.pdf.json.type3.library.index:classpath:/type3/library/index.json}")
     private String indexLocation;
 
     private final Map<String, Type3FontLibraryEntry> signatureIndex = new ConcurrentHashMap<>();
@@ -44,6 +42,17 @@ public class Type3FontLibrary {
 
     @jakarta.annotation.PostConstruct
     void initialise() {
+        if (applicationProperties.getPdfEditor() != null
+                && applicationProperties.getPdfEditor().getType3() != null
+                && applicationProperties.getPdfEditor().getType3().getLibrary() != null) {
+            this.indexLocation =
+                    applicationProperties.getPdfEditor().getType3().getLibrary().getIndex();
+        } else {
+            log.warn(
+                    "[TYPE3] PdfEditor Type3 library configuration not available; Type3 library disabled");
+            entries = List.of();
+            return;
+        }
         Resource resource = resourceLoader.getResource(indexLocation);
         if (!resource.exists()) {
             log.info("[TYPE3] Library index {} not found; Type3 library disabled", indexLocation);
@@ -192,24 +201,41 @@ public class Type3FontLibrary {
         if (payload == null) {
             return null;
         }
-        byte[] data = null;
+        String base64;
         if (payload.base64 != null && !payload.base64.isBlank()) {
+            // Validate the base64 string without wasteful full decode
+            // Only decode a small prefix to verify encoding is valid
             try {
-                data = Base64.getDecoder().decode(payload.base64);
+                byte[] probe =
+                        Base64.getDecoder()
+                                .decode(
+                                        payload.base64.substring(
+                                                0, Math.min(4, payload.base64.length())));
+                if (probe.length == 0 && payload.base64.length() <= 4) {
+                    return null;
+                }
             } catch (IllegalArgumentException ex) {
                 log.warn("[TYPE3] Invalid base64 payload in Type3 library: {}", ex.getMessage());
+                return null;
             }
+            // Keep the original base64 string directly — avoids 3x memory pressure
+            base64 = payload.base64;
         } else if (payload.resource != null && !payload.resource.isBlank()) {
-            data = loadResourceBytes(payload.resource);
-        }
-        if (data == null || data.length == 0) {
+            byte[] data = loadResourceBytes(payload.resource);
+            if (data == null || data.length == 0) {
+                return null;
+            }
+            base64 = Base64.getEncoder().encodeToString(data);
+        } else {
             return null;
         }
-        String base64 = Base64.getEncoder().encodeToString(data);
         return new Type3FontLibraryPayload(base64, normalizeFormat(payload.format));
     }
 
     private byte[] loadResourceBytes(String location) throws IOException {
+        if (location == null || location.isBlank()) {
+            throw new IOException("Resource location is null or blank");
+        }
         String resolved = resolveLocation(location);
         Resource resource = resourceLoader.getResource(resolved);
         if (!resource.exists()) {
@@ -241,7 +267,7 @@ public class Type3FontLibrary {
                 .filter(Objects::nonNull)
                 .map(String::trim)
                 .filter(s -> !s.isEmpty())
-                .collect(Collectors.toList());
+                .toList();
     }
 
     private String normalizeAlias(String alias) {

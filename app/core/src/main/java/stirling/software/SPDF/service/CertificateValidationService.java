@@ -2,6 +2,7 @@ package stirling.software.SPDF.service;
 
 import java.io.*;
 import java.net.HttpURLConnection;
+import java.net.URI;
 import java.net.URL;
 import java.security.GeneralSecurityException;
 import java.security.KeyStore;
@@ -423,38 +424,39 @@ public class CertificateValidationService {
     private void loadBundledMozillaCACerts() {
         try {
             log.info("Loading bundled Mozilla CA certificates from resources");
-            InputStream certStream =
-                    getClass().getClassLoader().getResourceAsStream("certs/cacert.pem");
-            if (certStream == null) {
-                log.warn("Bundled Mozilla CA certificate file not found in resources");
-                return;
-            }
+            try (InputStream certStream =
+                    getClass().getClassLoader().getResourceAsStream("certs/cacert.pem")) {
+                if (certStream == null) {
+                    log.debug(
+                            "Bundled Mozilla CA certificate file not found in resources — using Java system trust store only");
+                    return;
+                }
 
-            CertificateFactory cf = CertificateFactory.getInstance("X.509");
-            Collection<? extends Certificate> certs = cf.generateCertificates(certStream);
-            certStream.close();
+                CertificateFactory cf = CertificateFactory.getInstance("X.509");
+                Collection<? extends Certificate> certs = cf.generateCertificates(certStream);
 
-            int loadedCount = 0;
-            int skippedCount = 0;
+                int loadedCount = 0;
+                int skippedCount = 0;
 
-            for (Certificate cert : certs) {
-                if (cert instanceof X509Certificate x509) {
-                    // Only add CA certificates to trust anchors
-                    if (isCA(x509)) {
-                        String fingerprint = sha256Fingerprint(x509);
-                        String alias = "mozilla-" + fingerprint;
-                        signingTrustAnchors.setCertificateEntry(alias, x509);
-                        loadedCount++;
-                    } else {
-                        skippedCount++;
+                for (Certificate cert : certs) {
+                    if (cert instanceof X509Certificate x509) {
+                        // Only add CA certificates to trust anchors
+                        if (isCA(x509)) {
+                            String fingerprint = sha256Fingerprint(x509);
+                            String alias = "mozilla-" + fingerprint;
+                            signingTrustAnchors.setCertificateEntry(alias, x509);
+                            loadedCount++;
+                        } else {
+                            skippedCount++;
+                        }
                     }
                 }
-            }
 
-            log.info(
-                    "Loaded {} Mozilla CA certificates as trust anchors (skipped {} non-CA certs)",
-                    loadedCount,
-                    skippedCount);
+                log.info(
+                        "Loaded {} Mozilla CA certificates as trust anchors (skipped {} non-CA certs)",
+                        loadedCount,
+                        skippedCount);
+            }
         } catch (Exception e) {
             log.error("Failed to load bundled Mozilla CA certificates: {}", e.getMessage(), e);
         }
@@ -510,7 +512,7 @@ public class CertificateValidationService {
     private byte[] downloadTrustList(String urlStr) {
         HttpURLConnection conn = null;
         try {
-            URL url = new URL(urlStr);
+            URL url = URI.create(urlStr).toURL();
             conn = (HttpURLConnection) url.openConnection();
             conn.setRequestMethod("GET");
             conn.setConnectTimeout(10_000);
@@ -610,9 +612,11 @@ public class CertificateValidationService {
      */
     private int parseSecuritySettingsXML(InputStream xmlStream) throws Exception {
         DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
+        factory.setFeature(javax.xml.XMLConstants.FEATURE_SECURE_PROCESSING, true);
         factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
         factory.setFeature("http://xml.org/sax/features/external-general-entities", false);
         factory.setFeature("http://xml.org/sax/features/external-parameter-entities", false);
+        factory.setFeature("http://apache.org/xml/features/nonvalidating/load-external-dtd", false);
         factory.setXIncludeAware(false);
         factory.setExpandEntityReferences(false);
 
@@ -700,7 +704,7 @@ public class CertificateValidationService {
     private byte[] downloadXml(String urlStr) {
         HttpURLConnection conn = null;
         try {
-            URL url = new URL(urlStr);
+            URL url = URI.create(urlStr).toURL();
             conn = (HttpURLConnection) url.openConnection();
             conn.setRequestMethod("GET");
             conn.setConnectTimeout(10_000);
@@ -836,9 +840,11 @@ public class CertificateValidationService {
         DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
         factory.setNamespaceAware(true);
         // Secure processing hardening
+        factory.setFeature(javax.xml.XMLConstants.FEATURE_SECURE_PROCESSING, true);
         factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
         factory.setFeature("http://xml.org/sax/features/external-general-entities", false);
         factory.setFeature("http://xml.org/sax/features/external-parameter-entities", false);
+        factory.setFeature("http://apache.org/xml/features/nonvalidating/load-external-dtd", false);
         factory.setXIncludeAware(false);
         factory.setExpandEntityReferences(false);
         return factory;

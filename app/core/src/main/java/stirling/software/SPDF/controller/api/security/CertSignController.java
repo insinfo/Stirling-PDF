@@ -55,6 +55,7 @@ import org.bouncycastle.pkcs.PKCS8EncryptedPrivateKeyInfo;
 import org.bouncycastle.pkcs.PKCSException;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.io.ClassPathResource;
+import org.springframework.core.io.Resource;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.WebDataBinder;
@@ -74,10 +75,13 @@ import lombok.extern.slf4j.Slf4j;
 import stirling.software.SPDF.config.swagger.StandardPdfResponse;
 import stirling.software.SPDF.model.api.security.SignPDFWithCertRequest;
 import stirling.software.common.annotations.AutoJobPostMapping;
+import stirling.software.common.enumeration.ResourceWeight;
 import stirling.software.common.service.CustomPDFDocumentFactory;
 import stirling.software.common.service.ServerCertificateServiceInterface;
 import stirling.software.common.util.ExceptionUtils;
 import stirling.software.common.util.GeneralUtils;
+import stirling.software.common.util.TempFile;
+import stirling.software.common.util.TempFileManager;
 import stirling.software.common.util.WebResponseUtils;
 
 @RestController
@@ -104,16 +108,18 @@ public class CertSignController {
 
     private final CustomPDFDocumentFactory pdfDocumentFactory;
     private final ServerCertificateServiceInterface serverCertificateService;
+    private final TempFileManager tempFileManager;
 
     public CertSignController(
             CustomPDFDocumentFactory pdfDocumentFactory,
-            @Autowired(required = false)
-                    ServerCertificateServiceInterface serverCertificateService) {
+            @Autowired(required = false) ServerCertificateServiceInterface serverCertificateService,
+            TempFileManager tempFileManager) {
         this.pdfDocumentFactory = pdfDocumentFactory;
         this.serverCertificateService = serverCertificateService;
+        this.tempFileManager = tempFileManager;
     }
 
-    private static void sign(
+    public static void sign(
             CustomPDFDocumentFactory pdfDocumentFactory,
             MultipartFile input,
             OutputStream output,
@@ -133,17 +139,18 @@ public class CertSignController {
             signature.setReason(reason);
             signature.setSignDate(Calendar.getInstance()); // PDFBox requires Calendar
             if (Boolean.TRUE.equals(showSignature)) {
-                SignatureOptions signatureOptions = new SignatureOptions();
-                signatureOptions.setVisualSignature(
-                        instance.createVisibleSignature(doc, signature, pageNumber, showLogo));
-                signatureOptions.setPage(pageNumber);
+                try (SignatureOptions signatureOptions = new SignatureOptions()) {
+                    signatureOptions.setVisualSignature(
+                            instance.createVisibleSignature(doc, signature, pageNumber, showLogo));
+                    signatureOptions.setPage(pageNumber);
 
-                doc.addSignature(signature, instance, signatureOptions);
-
+                    doc.addSignature(signature, instance, signatureOptions);
+                    doc.saveIncremental(output);
+                }
             } else {
                 doc.addSignature(signature, instance);
+                doc.saveIncremental(output);
             }
-            doc.saveIncremental(output);
         } catch (Exception e) {
             ExceptionUtils.logException("PDF signing", e);
         }
@@ -154,7 +161,8 @@ public class CertSignController {
                 MediaType.MULTIPART_FORM_DATA_VALUE,
                 MediaType.APPLICATION_FORM_URLENCODED_VALUE
             },
-            value = "/cert-sign")
+            value = "/cert-sign",
+            resourceWeight = ResourceWeight.LARGE_WEIGHT)
     @StandardPdfResponse
     @Operation(
             summary = "Sign PDF with a Digital Certificate",
@@ -162,7 +170,7 @@ public class CertSignController {
                     "This endpoint accepts a PDF file, a digital certificate and related"
                             + " information to sign the PDF. It then returns the digitally signed PDF"
                             + " file. Input:PDF Output:PDF Type:SISO")
-    public ResponseEntity<byte[]> signPDFWithCert(@ModelAttribute SignPDFWithCertRequest request)
+    public ResponseEntity<Resource> signPDFWithCert(@ModelAttribute SignPDFWithCertRequest request)
             throws Exception {
         MultipartFile pdf = request.getFileInput();
         String certType = request.getCertType();
@@ -191,6 +199,12 @@ public class CertSignController {
 
         switch (certType) {
             case "PEM":
+                privateKeyFile =
+                        validateFilePresent(
+                                privateKeyFile, "PEM private key", "private key file is required");
+                certFile =
+                        validateFilePresent(
+                                certFile, "PEM certificate", "certificate file is required");
                 ks = KeyStore.getInstance("JKS");
                 ks.load(null);
                 PrivateKey privateKey = getPrivateKeyFromPEM(privateKeyFile.getBytes(), password);
@@ -200,10 +214,16 @@ public class CertSignController {
                 break;
             case "PKCS12":
             case "PFX":
+                p12File =
+                        validateFilePresent(
+                                p12File, "PKCS12 keystore", "PKCS12/PFX keystore file is required");
                 ks = KeyStore.getInstance("PKCS12");
                 ks.load(p12File.getInputStream(), password.toCharArray());
                 break;
             case "JKS":
+                jksfile =
+                        validateFilePresent(
+                                jksfile, "JKS keystore", "JKS keystore file is required");
                 ks = KeyStore.getInstance("JKS");
                 ks.load(jksfile.getInputStream(), password.toCharArray());
                 break;
@@ -233,22 +253,37 @@ public class CertSignController {
         }
 
         CreateSignature createSignature = new CreateSignature(ks, keystorePassword.toCharArray());
-        ByteArrayOutputStream baos = new ByteArrayOutputStream();
-        sign(
-                pdfDocumentFactory,
-                pdf,
-                baos,
-                createSignature,
-                showSignature,
-                pageNumber,
-                name,
-                location,
-                reason,
-                showLogo);
+        TempFile signedOut = tempFileManager.createManagedTempFile(".pdf");
+        try (OutputStream os = new FileOutputStream(signedOut.getFile())) {
+            sign(
+                    pdfDocumentFactory,
+                    pdf,
+                    os,
+                    createSignature,
+                    showSignature,
+                    pageNumber,
+                    name,
+                    location,
+                    reason,
+                    showLogo);
+        } catch (IOException e) {
+            signedOut.close();
+            throw e;
+        }
         // Return the signed PDF
-        return WebResponseUtils.bytesToWebResponse(
-                baos.toByteArray(),
-                GeneralUtils.generateFilename(pdf.getOriginalFilename(), "_signed.pdf"));
+        return WebResponseUtils.pdfFileToWebResponse(
+                signedOut, GeneralUtils.generateFilename(pdf.getOriginalFilename(), "_signed.pdf"));
+    }
+
+    private MultipartFile validateFilePresent(
+            MultipartFile file, String argumentName, String errorDescription) {
+        if (file == null || file.isEmpty()) {
+            throw ExceptionUtils.createIllegalArgumentException(
+                    "error.invalidArgument",
+                    "Invalid argument: {0}",
+                    argumentName + " - " + errorDescription);
+        }
+        return file;
     }
 
     private PrivateKey getPrivateKeyFromPEM(byte[] pemBytes, String password)
@@ -280,7 +315,7 @@ public class CertSignController {
         }
     }
 
-    class CreateSignature extends CreateSignatureBase {
+    public static class CreateSignature extends CreateSignatureBase {
         File logoFile;
 
         public CreateSignature(KeyStore keystore, char[] pin)

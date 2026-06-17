@@ -4,8 +4,10 @@ import java.io.Serializable;
 import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 import java.util.stream.Collectors;
 
 import org.hibernate.annotations.CreationTimestamp;
@@ -39,19 +41,23 @@ public class User implements UserDetails, Serializable {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     @Column(name = "user_id")
+    @EqualsAndHashCode.Include
     private Long id;
 
     @Column(name = "username", unique = true)
     private String username;
 
     @Column(name = "password")
+    @JsonIgnore
     private String password;
 
-    @Column(name = "apiKey")
+    @Column(name = "apiKey", unique = true)
+    @JsonIgnore
     private String apiKey;
 
+    // Boxed so SaaS rows from Supabase can leave it null; isEnabled() treats null as enabled.
     @Column(name = "enabled")
-    private boolean enabled;
+    private Boolean enabled;
 
     @Column(name = "isFirstLogin")
     private Boolean isFirstLogin = false;
@@ -76,6 +82,17 @@ public class User implements UserDetails, Serializable {
 
     @Column(name = "oauth_grandfathered")
     private Boolean oauthGrandfathered = false;
+
+    @Column(name = "email", unique = true)
+    private String email;
+
+    // SaaS-only: Supabase user UUID. Null in OSS / proprietary deployments.
+    // Column is `supabase_auth_id` (canonical name from the initial Supabase remote
+    // schema migration). An earlier Flyway V2 (PR #6384) accidentally introduced a
+    // parallel `supabase_id` column that was used by Java; V17 backfilled and dropped
+    // it. Field name is kept as `supabaseId` to avoid a wide refactor of callers.
+    @Column(name = "supabase_auth_id", unique = true)
+    private UUID supabaseId;
 
     @OneToMany(fetch = FetchType.EAGER, cascade = CascadeType.ALL, mappedBy = "user")
     private Set<Authority> authorities = new HashSet<>();
@@ -104,6 +121,11 @@ public class User implements UserDetails, Serializable {
         return Role.getRoleNameByRoleId(getRolesAsString());
     }
 
+    @Override
+    public boolean isEnabled() {
+        return enabled == null || enabled;
+    }
+
     public boolean isFirstLogin() {
         return isFirstLogin != null && isFirstLogin;
     }
@@ -129,7 +151,7 @@ public class User implements UserDetails, Serializable {
     }
 
     public void setAuthenticationType(AuthenticationType authenticationType) {
-        this.authenticationType = authenticationType.toString().toLowerCase();
+        this.authenticationType = authenticationType.toString().toLowerCase(Locale.ROOT);
     }
 
     public void addAuthorities(Set<Authority> authorities) {

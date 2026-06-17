@@ -3,7 +3,6 @@ package stirling.software.common.configuration;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.util.List;
 import java.util.Locale;
 import java.util.Properties;
@@ -38,16 +37,23 @@ public class AppConfig {
     private final ApplicationProperties applicationProperties;
 
     @Getter
-    @Value("${baseUrl:http://localhost}")
-    private String baseUrl;
-
-    @Getter
     @Value("${server.servlet.context-path:/}")
     private String contextPath;
 
     @Getter
     @Value("${server.port:8080}")
     private String serverPort;
+
+    /**
+     * Get the backend URL from system configuration. Falls back to http://localhost if not
+     * configured.
+     *
+     * @return The backend base URL for SAML/OAuth/API callbacks
+     */
+    public String getBackendUrl() {
+        String backendUrl = applicationProperties.getSystem().getBackendUrl();
+        return (backendUrl != null && !backendUrl.isBlank()) ? backendUrl : "http://localhost";
+    }
 
     @Value("${v2}")
     public boolean v2Enabled;
@@ -57,19 +63,9 @@ public class AppConfig {
         return v2Enabled;
     }
 
-    /* Commented out Thymeleaf template engine bean - to be removed when frontend migration is complete
-    @Bean
-    @ConditionalOnProperty(name = "system.customHTMLFiles", havingValue = "true")
-    public SpringTemplateEngine templateEngine(ResourceLoader resourceLoader) {
-        SpringTemplateEngine templateEngine = new SpringTemplateEngine();
-        templateEngine.addTemplateResolver(new FileFallbackTemplateResolver(resourceLoader));
-        return templateEngine;
-    }
-    */
-
     @Bean(name = "loginEnabled")
     public boolean loginEnabled() {
-        return applicationProperties.getSecurity().getEnableLogin();
+        return applicationProperties.getSecurity().isEnableLogin();
     }
 
     @Bean(name = "appName")
@@ -113,9 +109,7 @@ public class AppConfig {
 
     @Bean(name = "enableAlphaFunctionality")
     public boolean enableAlphaFunctionality() {
-        return applicationProperties.getSystem().getEnableAlphaFunctionality() != null
-                ? applicationProperties.getSystem().getEnableAlphaFunctionality()
-                : false;
+        return applicationProperties.getSystem().isEnableAlphaFunctionality();
     }
 
     @Bean(name = "rateLimit")
@@ -127,17 +121,17 @@ public class AppConfig {
 
     @Bean(name = "RunningInDocker")
     public boolean runningInDocker() {
-        return Files.exists(Paths.get("/.dockerenv"));
+        return Files.exists(Path.of("/.dockerenv"));
     }
 
     @Bean(name = "configDirMounted")
     public boolean isRunningInDockerWithConfig() {
-        Path dockerEnv = Paths.get("/.dockerenv");
+        Path dockerEnv = Path.of("/.dockerenv");
         // default to true if not docker
         if (!Files.exists(dockerEnv)) {
             return true;
         }
-        Path mountInfo = Paths.get("/proc/1/mountinfo");
+        Path mountInfo = Path.of("/proc/1/mountinfo");
         // this should always exist, if not some unknown usecase
         if (!Files.exists(mountInfo)) {
             return true;
@@ -258,9 +252,14 @@ public class AppConfig {
         return "NORMAL";
     }
 
-    @Bean(name = "disablePixel")
-    public boolean disablePixel() {
-        return Boolean.parseBoolean(env.getProperty("DISABLE_PIXEL", "false"));
+    @Bean(name = "scarfEnabled")
+    public boolean scarfEnabled() {
+        return applicationProperties.getSystem().isScarfEnabled();
+    }
+
+    @Bean(name = "posthogEnabled")
+    public boolean posthogEnabled() {
+        return applicationProperties.getSystem().isPosthogEnabled();
     }
 
     @Bean(name = "machineType")

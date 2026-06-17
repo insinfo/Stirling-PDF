@@ -26,6 +26,7 @@ public class RequestUriUtils {
                 || normalizedUri.startsWith("/public/")
                 || normalizedUri.startsWith("/pdfjs/")
                 || normalizedUri.startsWith("/pdfjs-legacy/")
+                || normalizedUri.startsWith("/pdfium/")
                 || normalizedUri.startsWith("/assets/")
                 || normalizedUri.startsWith("/locales/")
                 || normalizedUri.startsWith("/Login/")
@@ -37,17 +38,22 @@ public class RequestUriUtils {
         }
 
         // Specific static files bundled with the frontend
-        if (normalizedUri.equals("/robots.txt")
-                || normalizedUri.equals("/favicon.ico")
-                || normalizedUri.equals("/manifest.json")
-                || normalizedUri.equals("/site.webmanifest")
-                || normalizedUri.equals("/manifest-classic.json")
-                || normalizedUri.equals("/index.html")) {
+        if ("/robots.txt".equals(normalizedUri)
+                || "/favicon.ico".equals(normalizedUri)
+                || "/manifest.json".equals(normalizedUri)
+                || "/site.webmanifest".equals(normalizedUri)
+                || "/manifest-classic.json".equals(normalizedUri)
+                || "/index.html".equals(normalizedUri)) {
             return true;
         }
 
         // Login/error pages remain public
         if (normalizedUri.startsWith("/login") || normalizedUri.startsWith("/error")) {
+            return true;
+        }
+
+        // Mobile scanner page for QR code-based file uploads (peer-to-peer, no backend auth needed)
+        if (normalizedUri.startsWith("/mobile-scanner")) {
             return true;
         }
 
@@ -61,7 +67,8 @@ public class RequestUriUtils {
                 || normalizedUri.endsWith(".css")
                 || normalizedUri.endsWith(".mjs")
                 || normalizedUri.endsWith(".html")
-                || normalizedUri.endsWith(".toml");
+                || normalizedUri.endsWith(".toml")
+                || normalizedUri.endsWith(".wasm");
     }
 
     public static boolean isFrontendRoute(String contextPath, String requestURI) {
@@ -76,16 +83,23 @@ public class RequestUriUtils {
             return false;
         }
 
-        // Blocklist of backend/non-frontend paths that should still go through filters
+        // Blocklist of backend/non-frontend paths that should still go through filters.
+        //
+        // `/files` was historically a backend route; it is now a frontend route
+        // owned by HomePage / FileManagerView. Direct-nav or refresh on /files
+        // (or /files/<folder-uuid>) was returning the Spring auth filter's 401
+        // JSON instead of serving index.html, so the SPA never got a chance to
+        // mount and the user saw a raw error response. There are no `/files`
+        // backend mappings at the servlet root - the real storage endpoints
+        // live under `/api/v1/storage/files`, which is filtered out a few lines
+        // up by the `startsWith("/api/")` guard.
         String[] backendOnlyPrefixes = {
             "/register",
-            "/invite",
             "/pipeline",
             "/pdfjs",
             "/pdfjs-legacy",
             "/fonts",
             "/images",
-            "/files",
             "/css",
             "/js",
             "/swagger",
@@ -125,11 +139,13 @@ public class RequestUriUtils {
                 || requestURI.endsWith("popularity.txt")
                 || requestURI.endsWith(".js")
                 || requestURI.endsWith(".toml")
+                || requestURI.endsWith(".wasm")
                 || requestURI.contains("swagger")
                 || requestURI.startsWith("/api/v1/info")
                 || requestURI.startsWith("/site.webmanifest")
                 || requestURI.startsWith("/fonts")
-                || requestURI.startsWith("/pdfjs"));
+                || requestURI.startsWith("/pdfjs")
+                || requestURI.startsWith("/pdfium"));
     }
 
     /**
@@ -164,7 +180,19 @@ public class RequestUriUtils {
                         "/api/v1/ui-data/footer-info") // Public footer configuration
                 || trimmedUri.startsWith("/api/v1/invite/validate")
                 || trimmedUri.startsWith("/api/v1/invite/accept")
-                || trimmedUri.startsWith("/v1/api-docs");
+                // Health Endpoints
+                || trimmedUri.startsWith("/actuator/health")
+                || trimmedUri.startsWith("/health")
+                || trimmedUri.startsWith("/healthz")
+                || trimmedUri.startsWith("/liveness")
+                || trimmedUri.startsWith("/readiness")
+                || trimmedUri.startsWith(
+                        "/api/v1/mobile-scanner/") // Mobile scanner endpoints (no auth)
+                || trimmedUri.startsWith("/v1/api-docs")
+                // Workflow participant endpoints - access controlled by share tokens, not login
+                || trimmedUri.startsWith("/api/v1/workflow/participant/")
+                // Share-link SPA bootstrap; data APIs remain protected
+                || trimmedUri.matches("^/share/[^/]+/?$");
     }
 
     private static String stripContextPath(String contextPath, String requestURI) {

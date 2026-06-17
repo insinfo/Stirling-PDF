@@ -1,7 +1,6 @@
 package stirling.software.SPDF.controller.api;
 
 import java.awt.*;
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
@@ -13,6 +12,7 @@ import org.apache.pdfbox.pdmodel.PDPageContentStream;
 import org.apache.pdfbox.pdmodel.common.PDRectangle;
 import org.apache.pdfbox.pdmodel.graphics.form.PDFormXObject;
 import org.apache.pdfbox.util.Matrix;
+import org.springframework.core.io.Resource;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ModelAttribute;
@@ -28,7 +28,10 @@ import lombok.RequiredArgsConstructor;
 
 import stirling.software.SPDF.model.api.general.BookletImpositionRequest;
 import stirling.software.common.annotations.AutoJobPostMapping;
+import stirling.software.common.enumeration.ResourceWeight;
 import stirling.software.common.service.CustomPDFDocumentFactory;
+import stirling.software.common.util.GeneralUtils;
+import stirling.software.common.util.TempFileManager;
 import stirling.software.common.util.WebResponseUtils;
 
 @RestController
@@ -38,17 +41,19 @@ import stirling.software.common.util.WebResponseUtils;
 public class BookletImpositionController {
 
     private final CustomPDFDocumentFactory pdfDocumentFactory;
+    private final TempFileManager tempFileManager;
 
     @AutoJobPostMapping(
             value = "/booklet-imposition",
-            consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+            consumes = MediaType.MULTIPART_FORM_DATA_VALUE,
+            resourceWeight = ResourceWeight.MEDIUM_WEIGHT)
     @Operation(
             summary = "Create a booklet with proper page imposition",
             description =
                     "This operation combines page reordering for booklet printing with multi-page layout. "
                             + "It rearranges pages in the correct order for booklet printing and places multiple pages "
                             + "on each sheet for proper folding and binding. Input:PDF Output:PDF Type:SISO")
-    public ResponseEntity<byte[]> createBookletImposition(
+    public ResponseEntity<Resource> createBookletImposition(
             @ModelAttribute BookletImpositionRequest request) throws IOException {
 
         MultipartFile file = request.getFileInput();
@@ -68,33 +73,30 @@ public class BookletImpositionController {
                     "Booklet printing uses 2 pages per side (landscape). For 4-up, use the N-up feature.");
         }
 
-        PDDocument sourceDocument = pdfDocumentFactory.load(file);
-        int totalPages = sourceDocument.getNumberOfPages();
+        try (PDDocument sourceDocument = pdfDocumentFactory.load(file)) {
+            int totalPages = sourceDocument.getNumberOfPages();
 
-        // Create proper booklet with signature-based page ordering
-        PDDocument newDocument =
-                createSaddleBooklet(
-                        sourceDocument,
-                        totalPages,
-                        addBorder,
-                        spineLocation,
-                        addGutter,
-                        gutterSize,
-                        doubleSided,
-                        duplexPass,
-                        flipOnShortEdge);
+            // Create proper booklet with signature-based page ordering
+            try (PDDocument newDocument =
+                    createSaddleBooklet(
+                            sourceDocument,
+                            totalPages,
+                            addBorder,
+                            spineLocation,
+                            addGutter,
+                            gutterSize,
+                            doubleSided,
+                            duplexPass,
+                            flipOnShortEdge)) {
 
-        sourceDocument.close();
-
-        ByteArrayOutputStream baos = new ByteArrayOutputStream();
-        newDocument.save(baos);
-        newDocument.close();
-
-        byte[] result = baos.toByteArray();
-        return WebResponseUtils.bytesToWebResponse(
-                result,
-                Filenames.toSimpleFileName(file.getOriginalFilename()).replaceFirst("[.][^.]+$", "")
-                        + "_booklet.pdf");
+                return WebResponseUtils.pdfDocToWebResponse(
+                        newDocument,
+                        GeneralUtils.generateFilename(
+                                Filenames.toSimpleFileName(file.getOriginalFilename()),
+                                "_booklet.pdf"),
+                        tempFileManager);
+            }
+        }
     }
 
     private static int padToMultipleOf4(int n) {

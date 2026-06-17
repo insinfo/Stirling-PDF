@@ -5,8 +5,11 @@ import java.security.cert.X509Certificate;
 import java.security.interfaces.RSAPrivateKey;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 
 import org.springframework.core.io.Resource;
+import org.springframework.security.authentication.AuthenticationTrustResolver;
+import org.springframework.security.authentication.AuthenticationTrustResolverImpl;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.oauth2.client.authentication.OAuth2AuthenticationToken;
@@ -35,6 +38,7 @@ import stirling.software.proprietary.audit.Audited;
 import stirling.software.proprietary.security.saml2.CertificateUtils;
 import stirling.software.proprietary.security.saml2.CustomSaml2AuthenticatedPrincipal;
 import stirling.software.proprietary.security.service.JwtServiceInterface;
+import stirling.software.proprietary.service.AiUserDataService;
 
 @Slf4j
 @RequiredArgsConstructor
@@ -48,11 +52,21 @@ public class CustomLogoutSuccessHandler extends SimpleUrlLogoutSuccessHandler {
 
     private final JwtServiceInterface jwtService;
 
+    private final AiUserDataService aiUserDataService;
+
+    private static final AuthenticationTrustResolver TRUST_RESOLVER =
+            new AuthenticationTrustResolverImpl();
+
     @Override
     @Audited(type = AuditEventType.USER_LOGOUT, level = AuditLevel.BASIC)
     public void onLogoutSuccess(
             HttpServletRequest request, HttpServletResponse response, Authentication authentication)
             throws IOException {
+
+        String username = resolveUsername(request, authentication);
+        if (username != null) {
+            aiUserDataService.purgeUserDocuments(username);
+        }
 
         if (!response.isCommitted()) {
             if (authentication != null) {
@@ -85,6 +99,26 @@ public class CustomLogoutSuccessHandler extends SimpleUrlLogoutSuccessHandler {
                 getRedirectStrategy().sendRedirect(request, response, path);
             }
         }
+    }
+
+    /**
+     * Pick the right name to purge under. JWT cookie wins if present and parseable; we fall through
+     * to whatever Spring handed us only when there's no cookie. Spring's anonymous principal is
+     * filtered out via {@link AuthenticationTrustResolver} so we don't purge under that
+     * pseudo-user.
+     */
+    private String resolveUsername(HttpServletRequest request, Authentication authentication) {
+        if (jwtService != null) {
+            String fromCookie = jwtService.extractUsernameFromRequestAllowExpired(request);
+            if (fromCookie != null) {
+                return fromCookie;
+            }
+        }
+        if (authentication == null || TRUST_RESOLVER.isAnonymous(authentication)) {
+            return null;
+        }
+        String name = authentication.getName();
+        return (name != null && !name.isBlank()) ? name : null;
     }
 
     // Redirect for SAML2 authentication logout
@@ -150,7 +184,7 @@ public class CustomLogoutSuccessHandler extends SimpleUrlLogoutSuccessHandler {
         registrationId = oAuthToken.getAuthorizedClientRegistrationId();
 
         // Redirect based on OAuth2 provider
-        switch (registrationId.toLowerCase()) {
+        switch (registrationId.toLowerCase(Locale.ROOT)) {
             case "keycloak" -> {
                 KeycloakProvider keycloak = oauth.getClient().getKeycloak();
 
@@ -198,7 +232,7 @@ public class CustomLogoutSuccessHandler extends SimpleUrlLogoutSuccessHandler {
     private SamlClient getSamlClient(
             String registrationId, SAML2 samlConf, List<X509Certificate> certificates)
             throws SamlException {
-        String serverUrl = appConfig.getBaseUrl() + ":" + appConfig.getServerPort();
+        String serverUrl = appConfig.getBackendUrl() + ":" + appConfig.getServerPort();
 
         String relyingPartyIdentifier =
                 serverUrl + "/saml2/service-provider-metadata/" + registrationId;
