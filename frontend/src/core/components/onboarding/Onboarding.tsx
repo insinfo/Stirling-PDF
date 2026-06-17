@@ -27,7 +27,11 @@ import AdminAnalyticsChoiceModal from '@app/components/shared/AdminAnalyticsChoi
 import '@app/components/onboarding/OnboardingTour.css';
 
 export default function Onboarding() {
-  const { t } = useTranslation();
+
+  //isaque adiciou esta linha abaixa
+  return null; 
+
+ const { t } = useTranslation();
   const navigate = useNavigate();
   const location = useLocation();
   const bypassOnboarding = useBypassOnboarding();

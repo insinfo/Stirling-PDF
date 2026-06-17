@@ -1,0 +1,25 @@
+services:
+  stirling-pdf:
+    image: stirling-pdf-unified
+    build:
+      context: .
+      dockerfile: ./docker/Dockerfile.unified
+      args:
+        VERSION_TAG: "custom-build"
+    ports:
+       - "127.0.0.1:8080:8080"
+    volumes:
+      - ./trainingData:/usr/share/tesseract-ocr/4.00/tessdata
+      - ./extraConfigs:/configs
+      - ./logs:/logs
+      - ./customFiles:/customFiles
+    environment:
+      - DOCKER_ENABLE_SECURITY=false
+      - SECURITY_ENABLELOGIN=false #sem login 
+      - INSTALL_BOOK_AND_ADVANCED_HTML_OPS=false
+      - SYSTEM_DEFAULTLOCALE=pt-BR
+      - UI_APP_LOCALE=pt-BR
+      - TESSDATA_PREFIX=/usr/share/tesseract-ocr/4.00/tessdata
+      - UI_DEFAULT_VIEW=gird  # Define o padrão como Grade (ícones grandes)
+      - SYSTEM_MAXFILESIZE=0  # <--- ADICIONE ESTA LINHA (0 = ilimitado)
+    restart: always
